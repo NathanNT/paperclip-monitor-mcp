@@ -34,6 +34,8 @@ The bridge provides task and agent status, runs, comments, logs, schedules, reco
 
 The optional [Paperclip backend patch](patches/paperclip-supervision-management-bundle-2026.916.1.patch) adds native snapshot, change-feed, conditional-comment, and atomic management routes. The baseline tools work without it. Leave `PAPERCLIP_ATOMIC_MANAGEMENT` unset unless that patch has been deployed and verified against the matching Paperclip version.
 
+The separate [task-scoped timer patch](patches/paperclip-task-scoped-timer-2026.916.1.patch) fixes a Paperclip `v2026.916.1` scheduler issue: when an agent has exactly one actionable assigned task, its periodic timer run now carries that task's ID. This allows task-level writes and session reuse. It leaves proactive timers and ambiguous multi-task timers unscoped. This is a **Paperclip server patch**, not an MCP configuration switch; apply it to the matching Paperclip source and restart the server after building. It is independent of the management-route patch above.
+
 ## Check
 
 ```sh

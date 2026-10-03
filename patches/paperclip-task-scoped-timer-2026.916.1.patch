@@ -1,0 +1,101 @@
+diff --git a/server/src/__tests__/heartbeat-stale-queue-invalidation.test.ts b/server/src/__tests__/heartbeat-stale-queue-invalidation.test.ts
+index fc71329..051605f 100644
+--- a/server/src/__tests__/heartbeat-stale-queue-invalidation.test.ts
++++ b/server/src/__tests__/heartbeat-stale-queue-invalidation.test.ts
+@@ -866,6 +866,34 @@ describeEmbeddedPostgres("heartbeat stale queued-run invalidation", () => {
+     expect(agent?.lastHeartbeatAt?.getTime()).toBeGreaterThanOrEqual(now.getTime());
+   });
+ 
++  it("scopes a scheduled timer run to its sole assigned task", async () => {
++    const { companyId, agentId } = await seedCompanyAndAgent({
++      heartbeatConfig: { enabled: true, intervalSec: 60 },
++    });
++    const issueId = randomUUID();
++    await db.insert(issues).values({
++      id: issueId,
++      companyId,
++      title: "Sole assigned task",
++      status: "todo",
++      priority: "high",
++      assigneeAgentId: agentId,
++    });
++    const now = new Date();
++    await db.update(agents).set({
++      lastHeartbeatAt: new Date(now.getTime() - 120_000),
++    }).where(eq(agents.id, agentId));
++
++    const result = await heartbeat.tickTimers(now);
++    const runs = await db.select({ contextSnapshot: heartbeatRuns.contextSnapshot })
++      .from(heartbeatRuns)
++      .where(eq(heartbeatRuns.agentId, agentId));
++
++    expect(result.enqueued).toBe(1);
++    expect(runs).toHaveLength(1);
++    expect(runs[0]?.contextSnapshot).toMatchObject({ issueId, taskId: issueId });
++  });
++
+   it("allows generic timer wakes when the agent has assigned todo work", async () => {
+     const { companyId, agentId } = await seedCompanyAndAgent({
+       heartbeatConfig: {
+diff --git a/server/src/services/heartbeat.ts b/server/src/services/heartbeat.ts
+index 7d87632..7439ccb 100644
+--- a/server/src/services/heartbeat.ts
++++ b/server/src/services/heartbeat.ts
+@@ -29172,29 +29172,32 @@ export function heartbeatService(
+         const policy = parseHeartbeatPolicy(agent);
+         if (!policy.enabled || policy.intervalSec <= 0) continue;
+ 
+-        if (cutoff) {
+-          const eligibleIssue = await db
+-            .select({ id: issues.id })
+-            .from(issues)
+-            .where(
+-              and(
+-                eq(issues.companyId, agent.companyId),
+-                eq(issues.assigneeAgentId, agent.id),
+-                inArray(issues.status, ["todo", "in_progress"]),
+-                gte(issues.createdAt, cutoff),
+-              ),
+-            )
+-            .limit(1)
+-            .then((rows) => rows[0] ?? null);
+-          if (!eligibleIssue) continue;
+-        }
+-
+         checked += 1;
+         const baseline = new Date(
+           agent.lastHeartbeatAt ?? agent.createdAt,
+         ).getTime();
+         const elapsedMs = now.getTime() - baseline;
+         if (elapsedMs < policy.intervalSec * 1000) continue;
++        const timerIssues = await db
++          .select({ id: issues.id })
++          .from(issues)
++          .where(
++            and(
++              eq(issues.companyId, agent.companyId),
++              eq(issues.assigneeAgentId, agent.id),
++              isNull(issues.assigneeUserId),
++              isNull(issues.hiddenAt),
++              inArray(issues.status, [...TIMER_ACTIONABLE_ISSUE_STATUSES]),
++              isNull(issues.conversationAgentId),
++              ...(cutoff ? [gte(issues.createdAt, cutoff)] : []),
++            ),
++          )
++          .limit(2);
++        if (cutoff && timerIssues.length === 0) continue;
++        // Scope a timer wake only when its task is unambiguous. This lets
++        // task-level permissions and session reuse work without guessing which
++        // task the agent meant when it has multiple assignments.
++        const timerIssueId = timerIssues.length === 1 ? timerIssues[0]!.id : null;
+         const timerClaim = await claimDueTimerHeartbeat(
+           agent,
+           now,
+@@ -29213,6 +29216,7 @@ export function heartbeatService(
+             reason: "interval_elapsed",
+             now: now.toISOString(),
+             timerClaimWasFirstHeartbeat: timerClaim.wasFirstHeartbeat,
++            ...(timerIssueId ? { issueId: timerIssueId, taskId: timerIssueId } : {}),
+           },
+         });
+         if (run) enqueued += 1;
