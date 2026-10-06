@@ -4,6 +4,26 @@ Paperclip may finish a useful agent run while its issue remains `in_progress` wi
 
 This is the defect tracked in [Paperclip issue #12603](https://github.com/paperclipai/paperclip/issues/12603). [PR #12604](https://github.com/paperclipai/paperclip/pull/12604) proposes the upstream fix. The source patch here ports that fix to the clean `v2026.916.1` tag. It changes only `server/src/services/heartbeat.ts`, `packages/adapter-utils/src/server-utils.ts`, and two focused tests. It adds a dedicated `successfulRunHandoff` wake block and renders the original disposition-only instruction. Unrelated wakes do not inherit a bare `instruction` field.
 
+## Continuation contract correction
+
+`patches/paperclip-successful-run-handoff-continuation-contract-2026.916.1.patch` is a separate, source-only correction to the handoff instruction and its focused test. Apply it to the source checkout in addition to the patch above. The previous instruction named `resumeIntent` and `resumeFromRunId` as though an agent could record them through an issue update. They are internal wake-context fields, not accepted fields of the issue update or comment API. A comment containing those words and a `PATCH` that leaves the issue `in_progress` do not establish a continuation.
+
+In the observed live recovery, the board inspected and resolved the native recovery action to `todo`, preserving the assignee. Paperclip started a recovery run, and a subsequent issue-scoped on-demand wake started the research run. This sequence is distinct from a board-side issue `PATCH`; do not infer that a comment alone caused either wake. A board-side `PATCH /api/issues/{id}` with `status: "todo"`, `resume: true`, and a concrete next-action comment is another supported route, but its resulting wake must be verified. The `resume` field belongs to the public issue-update schema. A self-comment posted from a run that still owns the issue may suppress its own wake. Confirm a new queued, deferred, claimed, or running issue wake before treating a comment as a continuation.
+
+In the same live case, the research run recorded a new checkpoint and left the issue `todo` with a concrete next action. Its 300-second generic timer subsequently started another run on that issue, reusing the same agent session and execution workspace. This verifies one observed continuation cycle; a generic timer is not a task-scoped delivery guarantee when an agent has several actionable issues.
+
+An assigned `todo` issue passes the optional actionable-work filter for a periodic heartbeat, but the timer wake has no issue ID. It may lead the agent back to the issue, as observed here with session reuse; it is not a guaranteed continuation of that issue. Generic stranded-issue recovery also skips an assigned `todo` whose latest run succeeded unless a recovery action explicitly handed it back. The handoff instruction therefore asks for a durable, issue-scoped path or a real blocker/reviewer disposition.
+
+The correction does not change the installed runtime. From the source checkout, run:
+
+```sh
+git apply --check patches/paperclip-successful-run-handoff-continuation-contract-2026.916.1.patch
+git apply patches/paperclip-successful-run-handoff-continuation-contract-2026.916.1.patch
+pnpm exec vitest run server/src/services/recovery/successful-run-handoff.test.ts server/src/__tests__/heartbeat-successful-run-handoff-wake.test.ts packages/adapter-utils/src/wake-successful-run-handoff.test.ts
+```
+
+The source checkout used to create this patch passed all 40 tests in those three files.
+
 ## Source verification
 
 From a clean Paperclip `v2026.916.1` source checkout, check and apply `patches/paperclip-successful-run-handoff-2026.916.1.patch`, then run:
