@@ -14,7 +14,7 @@ In the same live case, the research run recorded a new checkpoint and left the i
 
 An assigned `todo` issue passes the optional actionable-work filter for a periodic heartbeat, but the timer wake has no issue ID. It may lead the agent back to the issue, as observed here with session reuse; it is not a guaranteed continuation of that issue. Generic stranded-issue recovery also skips an assigned `todo` whose latest run succeeded unless a recovery action explicitly handed it back. The handoff instruction therefore asks for a durable, issue-scoped path or a real blocker/reviewer disposition.
 
-The correction does not change the installed runtime. From the source checkout, run:
+For a source checkout, run:
 
 ```sh
 git apply --check patches/paperclip-successful-run-handoff-continuation-contract-2026.916.1.patch
@@ -24,7 +24,9 @@ pnpm exec vitest run server/src/services/recovery/successful-run-handoff.test.ts
 
 The source checkout used to create this patch passed all 40 tests in those three files.
 
-The matching compiled delta is `patches/paperclip-successful-run-handoff-continuation-contract-dist-2026.916.1.patch`. It applies only to the already installed local `@paperclipai/server/dist/services/recovery/successful-run-handoff.js` baseline whose SHA-256 is `d3b66148171b6d48cdddfc50dfdd2208ec7e893281f4d01133709e0469aad4e6`; the expected patched SHA-256 is `a6771f97582579590aa7c6c767f7c1e3974231a0b010bf98bc219defa7be4d30`. A clean source build is preferable for any other baseline. The compiled patch passed `node --check` and a byte-for-byte application check with `core.autocrlf=false`. It has **not** been applied to the running server: wait for a verified task-drain quiescent state and a safe restart so useful agent runs are not interrupted.
+The matching compiled delta is `patches/paperclip-successful-run-handoff-continuation-contract-dist-2026.916.1.patch`. It applies only to the already installed local `@paperclipai/server/dist/services/recovery/successful-run-handoff.js` baseline whose SHA-256 is `d3b66148171b6d48cdddfc50dfdd2208ec7e893281f4d01133709e0469aad4e6`; the expected patched SHA-256 is `a6771f97582579590aa7c6c767f7c1e3974231a0b010bf98bc219defa7be4d30`. A clean source build is preferable for any other baseline. The compiled patch passed `node --check` and a byte-for-byte application check with `core.autocrlf=false`.
+
+On 2026-10-06, the compiled correction was installed after Paperclip's native task drain reported `quiescent=true`, `activeRuns=0`, and `pendingWakes=0`, with no live runs. The prior file was backed up and its hash checked before replacement. The restarted v2026.916.1 server answered health checks on its original port with a single listener, and the installed file matched the patched hash above. The SEN-80 and SEN-82 agents both started new runs after restart. This verifies deployment and ordinary continuation, but the revised corrective handoff wording still needs a naturally occurring `missing-disposition` run to be validated end to end; do not force one solely for testing.
 
 ## Source verification
 
