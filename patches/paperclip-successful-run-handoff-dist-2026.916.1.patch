@@ -1,0 +1,123 @@
+diff --git a/@paperclipai/adapter-utils/dist/server-utils.js b/@paperclipai/adapter-utils/dist/server-utils.js
+index f0fd982..e8b3fde 100644
+--- a/@paperclipai/adapter-utils/dist/server-utils.js
++++ b/@paperclipai/adapter-utils/dist/server-utils.js
+@@ -671,6 +671,32 @@ function normalizePaperclipWakeLivenessContinuation(value) {
+         instruction,
+     };
+ }
++function normalizePaperclipWakeSuccessfulRunHandoff(value) {
++    const handoff = parseObject(value);
++    const attempt = asNumber(handoff.attempt, 0);
++    const maxAttempts = asNumber(handoff.maxAttempts, 0);
++    const sourceRunId = asString(handoff.sourceRunId, "").trim() || null;
++    const reason = asString(handoff.reason, "").trim() || null;
++    const missingDisposition = asString(handoff.missingDisposition, "").trim() || null;
++    const validDispositionOptions = Array.isArray(handoff.validDispositionOptions)
++        ? handoff.validDispositionOptions
++            .map((entry) => asString(entry, "").trim())
++            .filter((entry) => entry.length > 0)
++        : [];
++    const instruction = asString(handoff.instruction, "").trim() || null;
++    if (!attempt && !maxAttempts && !sourceRunId && !reason && !missingDisposition &&
++        validDispositionOptions.length === 0 && !instruction)
++        return null;
++    return {
++        attempt: attempt > 0 ? attempt : null,
++        maxAttempts: maxAttempts > 0 ? maxAttempts : null,
++        sourceRunId,
++        reason,
++        missingDisposition,
++        validDispositionOptions,
++        instruction,
++    };
++}
+ function normalizePaperclipWakeChildIssueSummary(value) {
+     const child = parseObject(value);
+     const id = asString(child.id, "").trim() || null;
+@@ -986,6 +1012,7 @@ export function normalizePaperclipWakePayload(value) {
+             .filter((entry) => Boolean(entry))
+         : [];
+     const livenessContinuation = normalizePaperclipWakeLivenessContinuation(payload.livenessContinuation);
++    const successfulRunHandoff = normalizePaperclipWakeSuccessfulRunHandoff(payload.successfulRunHandoff);
+     const taskWatchdog = normalizePaperclipWakeTaskWatchdog(payload.taskWatchdog);
+     const recovery = normalizePaperclipWakeRecovery(payload.recovery);
+     const childIssueSummaries = Array.isArray(payload.childIssueSummaries)
+@@ -1036,6 +1063,7 @@ export function normalizePaperclipWakePayload(value) {
+         !planReviewContext &&
+         !documentReviewContext &&
+         !livenessContinuation &&
++        !successfulRunHandoff &&
+         !taskWatchdog &&
+         !checkboxSelection &&
+         !questionResponse &&
+@@ -1067,6 +1095,7 @@ export function normalizePaperclipWakePayload(value) {
+         documentReviewContext,
+         annotationDeltas,
+         livenessContinuation,
++        successfulRunHandoff,
+         taskWatchdog,
+         interactionId: asString(payload.interactionId, "").trim() || null,
+         sourceRunId: asString(payload.sourceRunId, "").trim() || null,
+@@ -1108,6 +1137,7 @@ export function stringifyPaperclipWakePayload(value, options = {}) {
+ export function isPaperclipRecoveryWakePayload(value) {
+     const normalized = normalizePaperclipWakePayload(value);
+     return Boolean(normalized?.recovery ||
++        normalized?.successfulRunHandoff ||
+         normalized?.reason === "source_scoped_recovery_action");
+ }
+ const PAPERCLIP_EXTERNAL_CHAT_WAKE_REASONS = new Set([
+@@ -1837,6 +1867,28 @@ function renderPaperclipWakePromptBody(value, options = {}) {
+             lines.push(`- instruction: ${continuation.instruction}`);
+         }
+     }
++    if (normalized.successfulRunHandoff) {
++        const handoff = normalized.successfulRunHandoff;
++        lines.push("", "Successful run missing a disposition:");
++        if (handoff.attempt) {
++            lines.push(`- attempt: ${handoff.attempt}${handoff.maxAttempts ? `/${handoff.maxAttempts}` : ""}`);
++        }
++        if (handoff.sourceRunId) {
++            lines.push(`- source run: ${handoff.sourceRunId}`);
++        }
++        if (handoff.reason) {
++            lines.push(`- reason: ${handoff.reason}`);
++        }
++        if (handoff.missingDisposition) {
++            lines.push(`- missing: ${handoff.missingDisposition}`);
++        }
++        if (handoff.validDispositionOptions.length > 0) {
++            lines.push(`- valid dispositions: ${handoff.validDispositionOptions.join(", ")}`);
++        }
++        if (handoff.instruction) {
++            lines.push("- instruction:", handoff.instruction);
++        }
++    }
+     if (normalized.childIssueSummaries.length > 0) {
+         lines.push("", "Direct child issue summaries:");
+         for (const child of normalized.childIssueSummaries) {
+diff --git a/@paperclipai/server/dist/services/heartbeat.js b/@paperclipai/server/dist/services/heartbeat.js
+index 3a820b0..b0faee3 100644
+--- a/@paperclipai/server/dist/services/heartbeat.js
++++ b/@paperclipai/server/dist/services/heartbeat.js
+@@ -5250,6 +5250,20 @@ export async function buildPaperclipWakePayload(input) {
+             ? input.contextSnapshot.childIssueSummaries
+             : [],
+         childIssueSummaryTruncated: input.contextSnapshot.childIssueSummaryTruncated === true,
++        successfulRunHandoff: input.contextSnapshot.handoffRequired === true ||
++            readNonEmptyString(input.contextSnapshot.handoffReason)
++            ? {
++                attempt: input.contextSnapshot.handoffAttempt,
++                maxAttempts: input.contextSnapshot.maxHandoffAttempts,
++                sourceRunId: readNonEmptyString(input.contextSnapshot.sourceRunId),
++                reason: readNonEmptyString(input.contextSnapshot.handoffReason),
++                missingDisposition: readNonEmptyString(input.contextSnapshot.missingDisposition),
++                validDispositionOptions: Array.isArray(input.contextSnapshot.validDispositionOptions)
++                    ? input.contextSnapshot.validDispositionOptions
++                    : [],
++                instruction: readNonEmptyString(input.contextSnapshot.instruction),
++            }
++            : null,
+         livenessContinuation: readNonEmptyString(input.contextSnapshot.livenessContinuationState) ||
+             readNonEmptyString(input.contextSnapshot.livenessContinuationInstruction) ||
+             readNonEmptyString(input.contextSnapshot.livenessContinuationSourceRunId) ||

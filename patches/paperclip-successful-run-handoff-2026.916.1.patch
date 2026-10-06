@@ -1,0 +1,387 @@
+diff --git a/packages/adapter-utils/src/server-utils.ts b/packages/adapter-utils/src/server-utils.ts
+index 08872e9d..1dc94072 100644
+--- a/packages/adapter-utils/src/server-utils.ts
++++ b/packages/adapter-utils/src/server-utils.ts
+@@ -715,6 +715,16 @@ type PaperclipWakeLivenessContinuation = {
+   instruction: string | null;
+ };
+ 
++type PaperclipWakeSuccessfulRunHandoff = {
++  attempt: number | null;
++  maxAttempts: number | null;
++  sourceRunId: string | null;
++  reason: string | null;
++  missingDisposition: string | null;
++  validDispositionOptions: string[];
++  instruction: string | null;
++};
++
+ type PaperclipWakeChildIssueSummary = {
+   id: string | null;
+   identifier: string | null;
+@@ -822,6 +832,7 @@ type PaperclipWakePayload = {
+   planReviewContext: PaperclipWakePlanReviewContext | null;
+   documentReviewContext: PaperclipWakeDocumentReviewContext | null;
+   livenessContinuation: PaperclipWakeLivenessContinuation | null;
++  successfulRunHandoff: PaperclipWakeSuccessfulRunHandoff | null;
+   taskWatchdog: PaperclipWakeTaskWatchdogContext | null;
+   interactionId: string | null;
+   sourceRunId: string | null;
+@@ -1326,6 +1337,36 @@ function normalizePaperclipWakeLivenessContinuation(
+   };
+ }
+ 
++function normalizePaperclipWakeSuccessfulRunHandoff(
++  value: unknown,
++): PaperclipWakeSuccessfulRunHandoff | null {
++  const handoff = parseObject(value);
++  const attempt = asNumber(handoff.attempt, 0);
++  const maxAttempts = asNumber(handoff.maxAttempts, 0);
++  const sourceRunId = asString(handoff.sourceRunId, "").trim() || null;
++  const reason = asString(handoff.reason, "").trim() || null;
++  const missingDisposition = asString(handoff.missingDisposition, "").trim() || null;
++  const validDispositionOptions = Array.isArray(handoff.validDispositionOptions)
++    ? handoff.validDispositionOptions
++        .map((entry) => asString(entry, "").trim())
++        .filter((entry) => entry.length > 0)
++    : [];
++  const instruction = asString(handoff.instruction, "").trim() || null;
++  if (
++    !attempt && !maxAttempts && !sourceRunId && !reason && !missingDisposition &&
++    validDispositionOptions.length === 0 && !instruction
++  ) return null;
++  return {
++    attempt: attempt > 0 ? attempt : null,
++    maxAttempts: maxAttempts > 0 ? maxAttempts : null,
++    sourceRunId,
++    reason,
++    missingDisposition,
++    validDispositionOptions,
++    instruction,
++  };
++}
++
+ function normalizePaperclipWakeChildIssueSummary(
+   value: unknown,
+ ): PaperclipWakeChildIssueSummary | null {
+@@ -1764,6 +1805,9 @@ export function normalizePaperclipWakePayload(
+   const livenessContinuation = normalizePaperclipWakeLivenessContinuation(
+     payload.livenessContinuation,
+   );
++  const successfulRunHandoff = normalizePaperclipWakeSuccessfulRunHandoff(
++    payload.successfulRunHandoff,
++  );
+   const taskWatchdog = normalizePaperclipWakeTaskWatchdog(payload.taskWatchdog);
+   const recovery = normalizePaperclipWakeRecovery(payload.recovery);
+   const childIssueSummaries = Array.isArray(payload.childIssueSummaries)
+@@ -1840,6 +1884,7 @@ export function normalizePaperclipWakePayload(
+     !planReviewContext &&
+     !documentReviewContext &&
+     !livenessContinuation &&
++    !successfulRunHandoff &&
+     !taskWatchdog &&
+     !checkboxSelection &&
+     !questionResponse &&
+@@ -1883,6 +1928,7 @@ export function normalizePaperclipWakePayload(
+     documentReviewContext,
+     annotationDeltas,
+     livenessContinuation,
++    successfulRunHandoff,
+     taskWatchdog,
+     interactionId: asString(payload.interactionId, "").trim() || null,
+     sourceRunId: asString(payload.sourceRunId, "").trim() || null,
+@@ -1943,6 +1989,7 @@ export function isPaperclipRecoveryWakePayload(value: unknown): boolean {
+   const normalized = normalizePaperclipWakePayload(value);
+   return Boolean(
+     normalized?.recovery ||
++    normalized?.successfulRunHandoff ||
+     normalized?.reason === "source_scoped_recovery_action",
+   );
+ }
+@@ -2954,6 +3001,23 @@ function renderPaperclipWakePromptBody(
+     }
+   }
+ 
++  if (normalized.successfulRunHandoff) {
++    const handoff = normalized.successfulRunHandoff;
++    lines.push("", "Successful run missing a disposition:");
++    if (handoff.attempt) {
++      lines.push(
++        `- attempt: ${handoff.attempt}${handoff.maxAttempts ? `/${handoff.maxAttempts}` : ""}`,
++      );
++    }
++    if (handoff.sourceRunId) lines.push(`- source run: ${handoff.sourceRunId}`);
++    if (handoff.reason) lines.push(`- reason: ${handoff.reason}`);
++    if (handoff.missingDisposition) lines.push(`- missing: ${handoff.missingDisposition}`);
++    if (handoff.validDispositionOptions.length > 0) {
++      lines.push(`- valid dispositions: ${handoff.validDispositionOptions.join(", ")}`);
++    }
++    if (handoff.instruction) lines.push("- instruction:", handoff.instruction);
++  }
++
+   if (normalized.childIssueSummaries.length > 0) {
+     lines.push("", "Direct child issue summaries:");
+     for (const child of normalized.childIssueSummaries) {
+diff --git a/packages/adapter-utils/src/wake-successful-run-handoff.test.ts b/packages/adapter-utils/src/wake-successful-run-handoff.test.ts
+new file mode 100644
+index 00000000..9eb6186c
+--- /dev/null
++++ b/packages/adapter-utils/src/wake-successful-run-handoff.test.ts
+@@ -0,0 +1,83 @@
++import { describe, expect, it } from "vitest";
++import {
++  isPaperclipRecoveryWakePayload,
++  renderPaperclipWakePrompt,
++  selectPaperclipTaskMarkdown,
++} from "./server-utils.js";
++
++// A corrective "your run succeeded but the issue has no disposition" wake carries
++// its remediation text in the handoff block. Before this block existed on the
++// payload, the retry prompt said nothing about recording a disposition, so the
++// corrective run repeated the previous run instead of closing it out.
++const HANDOFF_WAKE = {
++  reason: "finish_successful_run_handoff",
++  issue: {
++    id: "11111111-1111-4111-8111-111111111111",
++    identifier: "PAP-123",
++    title: "Answer a question",
++    status: "in_progress",
++    priority: "medium",
++    workMode: "standard",
++  },
++  successfulRunHandoff: {
++    attempt: 1,
++    maxAttempts: 1,
++    sourceRunId: "22222222-2222-4222-8222-222222222222",
++    reason: "successful_run_missing_state",
++    missingDisposition: "clear_next_step",
++    validDispositionOptions: ["done", "blocked", "in_review"],
++    instruction:
++      "This is a status-only retry to the original agent. Record a disposition; do not start new work.",
++  },
++};
++
++describe("successful-run handoff wake", () => {
++  it("renders the remediation instruction", () => {
++    const prompt = renderPaperclipWakePrompt(HANDOFF_WAKE);
++
++    expect(prompt).toContain("Successful run missing a disposition:");
++    expect(prompt).toContain("Record a disposition; do not start new work.");
++  });
++
++  it("names the reason, the missing value, the valid options and the attempt", () => {
++    const prompt = renderPaperclipWakePrompt(HANDOFF_WAKE);
++
++    expect(prompt).toContain("- reason: successful_run_missing_state");
++    expect(prompt).toContain("- missing: clear_next_step");
++    expect(prompt).toContain("- valid dispositions: done, blocked, in_review");
++    expect(prompt).toContain("- attempt: 1/1");
++  });
++
++  it("counts as a recovery-scoped wake (full task brief on resume; recovery-style prompt selection in adapters)", () => {
++    // The classification does two things: adapters that ask for the task brief on
++    // a resumed session get the full brief instead of the compact delta, and the
++    // adapters that skip their heartbeat prompt template on recovery wakes skip it
++    // here too. It does not change the execution-contract lines that
++    // renderPaperclipWakePrompt selects; those follow the local recovery block.
++    expect(isPaperclipRecoveryWakePayload(HANDOFF_WAKE)).toBe(true);
++    expect(
++      selectPaperclipTaskMarkdown(
++        {
++          paperclipTaskMarkdown: "Full task brief.",
++          paperclipTaskMarkdownCompact: "Compact resume delta.",
++          paperclipWake: HANDOFF_WAKE,
++        },
++        { resumedSession: true },
++      ),
++    ).toBe("Full task brief.");
++  });
++
++  it("leaves an ordinary wake untouched", () => {
++    const ordinary = { reason: "issue_assigned", issue: HANDOFF_WAKE.issue };
++
++    expect(isPaperclipRecoveryWakePayload(ordinary)).toBe(false);
++    expect(renderPaperclipWakePrompt(ordinary)).not.toContain("Successful run missing a disposition");
++  });
++
++  it("ignores a handoff block with nothing in it", () => {
++    const empty = { ...HANDOFF_WAKE, successfulRunHandoff: {} };
++
++    expect(isPaperclipRecoveryWakePayload(empty)).toBe(false);
++    expect(renderPaperclipWakePrompt(empty)).not.toContain("Successful run missing a disposition");
++  });
++});
+diff --git a/server/src/__tests__/heartbeat-successful-run-handoff-wake.test.ts b/server/src/__tests__/heartbeat-successful-run-handoff-wake.test.ts
+new file mode 100644
+index 00000000..1f321561
+--- /dev/null
++++ b/server/src/__tests__/heartbeat-successful-run-handoff-wake.test.ts
+@@ -0,0 +1,136 @@
++import { describe, expect, it } from "vitest";
++import {
++  isPaperclipRecoveryWakePayload,
++  renderPaperclipWakePrompt,
++} from "@paperclipai/adapter-utils/server-utils";
++import { buildPaperclipWakePayload } from "../services/heartbeat.js";
++import { decideIssueReviewPathRecovery } from "../services/recovery/review-path-recovery.js";
++import {
++  SUCCESSFUL_RUN_HANDOFF_OPTIONS,
++  SUCCESSFUL_RUN_MISSING_STATE_REASON,
++  decideSuccessfulRunHandoff,
++} from "../services/recovery/successful-run-handoff.js";
++
++// buildPaperclipWakePayload only reads the run-secret registry through the
++// injected db, so a stub that returns no rows keeps this suite off Postgres.
++const db = {
++  select: () => ({
++    from: () => ({
++      where: async () => [],
++    }),
++  }),
++} as never;
++
++const issueSummary = {
++  id: "issue-1",
++  identifier: "PAP-1",
++  title: "Finish backend handoff",
++  description: "Implement and verify the backend handoff behavior.",
++  status: "in_progress",
++  priority: "medium",
++  workMode: "standard",
++};
++
++function handoffContextSnapshot() {
++  const decision = decideSuccessfulRunHandoff({
++    run: {
++      id: "run-1",
++      companyId: "company-1",
++      agentId: "agent-1",
++      status: "succeeded",
++      contextSnapshot: { issueId: "issue-1" },
++    } as never,
++    issue: {
++      id: "issue-1",
++      companyId: "company-1",
++      identifier: "PAP-1",
++      title: "Finish backend handoff",
++      description: "Implement and verify the backend handoff behavior.",
++      status: "in_progress",
++      assigneeAgentId: "agent-1",
++      assigneeUserId: null,
++      executionState: null,
++    } as never,
++    agent: { id: "agent-1", companyId: "company-1", status: "idle" } as never,
++    livenessState: "advanced",
++    detectedProgressSummary: "Run produced concrete action evidence: 1 issue comment(s)",
++    finalReport: "Implemented the handoff path and ran the focused test.",
++    nextAction: "Record the correct issue disposition.",
++    taskKey: "issue-1",
++    hasActiveExecutionPath: false,
++    hasQueuedWake: false,
++    hasPendingInteractionOrApproval: false,
++    hasPersistedMonitor: false,
++    hasExplicitBlockerPath: false,
++    hasOpenRecoveryIssue: false,
++    hasPauseHold: false,
++    hasActiveRoutineContinuation: false,
++    budgetBlocked: false,
++    idempotentWakeExists: false,
++  });
++  if (decision.kind !== "enqueue") throw new Error(`expected an enqueue decision, got ${decision.kind}`);
++  return decision.contextSnapshot;
++}
++
++function reviewPathContextSnapshot() {
++  const decision = decideIssueReviewPathRecovery({
++    issueId: "issue-1",
++    sourceRunId: "run-1",
++    assigneeAgentId: "agent-1",
++    contextSnapshot: { issueId: "issue-1", wakeReason: "issue_assigned" },
++    reviewAttention: { state: "stalled", paths: [], reason: null },
++    existingWake: false,
++  });
++  if (decision.kind !== "enqueue") throw new Error(`expected an enqueue decision, got ${decision.kind}`);
++  return decision.contextSnapshot;
++}
++
++describe("successful-run handoff wake payload", () => {
++  it("carries the producer's remediation instruction into the payload and the prompt", async () => {
++    const payload = await buildPaperclipWakePayload({
++      db,
++      companyId: "company-1",
++      contextSnapshot: handoffContextSnapshot(),
++      issueSummary,
++    });
++
++    expect(payload?.successfulRunHandoff).toMatchObject({
++      attempt: 1,
++      maxAttempts: 1,
++      sourceRunId: "run-1",
++      reason: SUCCESSFUL_RUN_MISSING_STATE_REASON,
++      missingDisposition: "clear_next_step",
++      validDispositionOptions: [...SUCCESSFUL_RUN_HANDOFF_OPTIONS],
++    });
++
++    const prompt = renderPaperclipWakePrompt(payload, { resumedSession: true });
++    expect(prompt).toContain("Successful run missing a disposition:");
++    expect(prompt).toContain(`- reason: ${SUCCESSFUL_RUN_MISSING_STATE_REASON}`);
++    expect(prompt).toContain("- missing: clear_next_step");
++    expect(prompt).toContain("Your last run on this issue ended successfully");
++    expect(isPaperclipRecoveryWakePayload(payload)).toBe(true);
++  });
++
++  it("does not read a review-path recovery wake as a successful-run handoff", async () => {
++    // Review-path recovery writes a bare `instruction` and `sourceRunId` into its
++    // context snapshot. Only `handoffRequired` and `handoffReason` mark a
++    // successful-run handoff, so this wake must keep its own shape.
++    const contextSnapshot = reviewPathContextSnapshot();
++    expect(contextSnapshot).toMatchObject({
++      instruction: expect.stringContaining("still in review"),
++      sourceRunId: "run-1",
++    });
++
++    const payload = await buildPaperclipWakePayload({
++      db,
++      companyId: "company-1",
++      contextSnapshot,
++      issueSummary,
++    });
++
++    expect(payload?.successfulRunHandoff ?? null).toBeNull();
++    expect(renderPaperclipWakePrompt(payload, { resumedSession: true }))
++      .not.toContain("Successful run missing a disposition");
++    expect(isPaperclipRecoveryWakePayload(payload)).toBe(false);
++  });
++});
+diff --git a/server/src/services/heartbeat.ts b/server/src/services/heartbeat.ts
+index 9321867d..ffd4c9c1 100644
+--- a/server/src/services/heartbeat.ts
++++ b/server/src/services/heartbeat.ts
+@@ -8052,6 +8052,27 @@ export async function buildPaperclipWakePayload(input: {
+       : [],
+     childIssueSummaryTruncated:
+       input.contextSnapshot.childIssueSummaryTruncated === true,
++    // A successful-run handoff stores its instruction separately from recovery
++    // actions. Only explicit handoff metadata may project it into the wake.
++    successfulRunHandoff:
++      input.contextSnapshot.handoffRequired === true ||
++      readNonEmptyString(input.contextSnapshot.handoffReason)
++        ? {
++            attempt: input.contextSnapshot.handoffAttempt,
++            maxAttempts: input.contextSnapshot.maxHandoffAttempts,
++            sourceRunId: readNonEmptyString(input.contextSnapshot.sourceRunId),
++            reason: readNonEmptyString(input.contextSnapshot.handoffReason),
++            missingDisposition: readNonEmptyString(
++              input.contextSnapshot.missingDisposition,
++            ),
++            validDispositionOptions: Array.isArray(
++              input.contextSnapshot.validDispositionOptions,
++            )
++              ? input.contextSnapshot.validDispositionOptions
++              : [],
++            instruction: readNonEmptyString(input.contextSnapshot.instruction),
++          }
++        : null,
+     livenessContinuation:
+       readNonEmptyString(input.contextSnapshot.livenessContinuationState) ||
+       readNonEmptyString(

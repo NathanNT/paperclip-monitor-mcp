@@ -36,6 +36,8 @@ The optional [Paperclip backend patch](patches/paperclip-supervision-management-
 
 The separate [task-scoped timer patch](patches/paperclip-task-scoped-timer-2026.916.1.patch) fixes a Paperclip `v2026.916.1` scheduler issue: when an agent has exactly one actionable assigned task, its periodic timer run now carries that task's ID. This allows task-level writes and session reuse. It leaves proactive timers and ambiguous multi-task timers unscoped. This is a **Paperclip server patch**, not an MCP configuration switch; apply it to the matching Paperclip source and restart the server after building. It is independent of the management-route patch above.
 
+The [successful-run handoff patch](patches/paperclip-successful-run-handoff-2026.916.1.patch) ports [upstream PR #12604](https://github.com/paperclipai/paperclip/pull/12604) to Paperclip `v2026.916.1`. It carries a corrective handoff instruction into the agent's wake prompt, so a resumed agent can record the missing disposition without repeating completed work. A separate [compiled-runtime delta](patches/paperclip-successful-run-handoff-dist-2026.916.1.patch) records the narrowly applied change on the locally patched npm package. See the [handoff patch note](docs/SUCCESSFUL-RUN-HANDOFF.md) for version, baseline and verification details; do not apply the compiled delta to an unmatched package.
+
 ## Check
 
 ```sh
