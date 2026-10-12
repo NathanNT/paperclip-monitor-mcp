@@ -1,8 +1,9 @@
 # Tool catalog
 
-The bridge exposes 43 tools when `PAPERCLIP_ALLOW_WRITES=1` is set. Without that opt-in, the 15 explicit write tools are hidden; some monitoring reads may still reconcile internal state. This table describes compatibility tested against Paperclip `v2026.916.1`.
+The bridge exposes 53 tools when `PAPERCLIP_ALLOW_WRITES=1` is set. Without that opt-in, the 21 explicit write tools are hidden; some monitoring reads may still reconcile internal state. The original tool set was tested against Paperclip `v2026.916.1`; project and agent setup routes were checked against `v2026.1005.0`.
 
 - **B**: works with the baseline Paperclip backend.
+- **C**: project and agent route checked on local Paperclip `v2026.1005.0`; compatibility with older versions is not established.
 - **P**: requires the optional backend patch in `patches/` to be deployed.
 - **B / A**: works on the baseline backend; after deploying the patch, `PAPERCLIP_ATOMIC_MANAGEMENT=1` enables additional server-side preconditions for this tool. Leave the flag unset on an unpatched backend.
 - **R**: read; **R\***: API read that may reconcile stale internal state; **W**: explicit write. The one-shot client requires `--allow-write` for **R\*** and **W** tools.
@@ -21,12 +22,29 @@ All names remain visible in the MCP catalog even when the optional backend route
 | `paperclip_changes_since` | R* | B |
 | `paperclip_server_changes` | R | P |
 
+## Projects and workspaces
+
+| Tool | Effect | Backend |
+| --- | --- | --- |
+| `paperclip_list_projects` | R | C |
+| `paperclip_get_project` | R | C |
+| `paperclip_create_project` | W | C |
+| `paperclip_update_project` | W | C |
+| `paperclip_list_project_workspaces` | R | C |
+| `paperclip_create_project_workspace` | W | C |
+| `paperclip_update_project_workspace` | W | C |
+
+Project creation requires a stable `idempotencyKey`. An optional workspace can be created with it. Workspace creation on its own has no idempotency key: inspect the project workspaces after an uncertain result before retrying. Read results omit project environment values, repository URLs, commands and runtime policies.
+
 ## Agents and schedules
 
 | Tool | Effect | Backend |
 | --- | --- | --- |
 | `paperclip_list_agents` | R | B |
 | `paperclip_get_agent` | R | B |
+| `paperclip_list_codex_models` | R | C |
+| `paperclip_create_agent` | W | C |
+| `paperclip_update_agent` | W | C |
 | `paperclip_agent_schedule_state` | R* | B |
 | `paperclip_pause_agent` | W | B |
 | `paperclip_resume_agent` | W | B |
@@ -34,6 +52,8 @@ All names remain visible in the MCP catalog even when the optional backend route
 | `paperclip_manage_agents_bulk` | W | B |
 | `paperclip_set_agent_timer` | W | B |
 | `paperclip_server_set_agent_timer` | W | P |
+
+The new agent tools accept bounded `codex_local` settings rather than arbitrary adapter or runtime configuration. Creation leaves the agent idle; task assignment and wake remain separate. Updates require the current `updatedAt`. After an uncertain create result, inspect the agent list before retrying.
 
 `paperclip_manage_agents_bulk` selects at most 20 agents by exactly one of `agentIds`, `taskIds`, or `projectId`. Its `changes` object accepts a lowercase model identifier made of letters, digits, dots and hyphens, plus `reasoningEffort` and `fastMode`; it sends only those adapter fields to Paperclip, preserving credentials and unrelated settings. The default is `dryRun: true` and `launch: "none"`. An explicit `dryRun: false` applies and verifies settings. `launch: "resume"` resumes paused agents without guaranteeing a run; `launch: "wake"` resumes an eligible paused agent and requests an on-demand task run. Wake requires a stable UUID `operationId` so each agent gets a repeatable idempotency key. The tool never changes issue status or resolves a blocked task. Blocked or non-actionable tasks are reported as skipped. A recent queued or scheduled-retry run also prevents a duplicate wake.
 

@@ -1,8 +1,8 @@
 {
   "name": "paperclip-agent-control-mcp",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
-  "description": "Local stdio MCP server for monitoring and managing Paperclip agents and tasks",
+  "description": "Local stdio MCP server for Paperclip projects, workspaces, agents, tasks and runs",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -23,8 +23,8 @@
     "SECURITY.md"
   ],
   "scripts": {
-    "check": "node --check paperclip-mcp.mjs && node --check paperclip-mcp-call.mjs && node --check test/bridge.test.mjs && node --check test/bulk.test.mjs",
-    "test": "node test/bridge.test.mjs && node test/bulk.test.mjs",
+    "check": "node --check paperclip-mcp.mjs && node --check paperclip-mcp-call.mjs && node --check test/bridge.test.mjs && node --check test/bulk.test.mjs && node --check test/project_agent_mcp.test.mjs",
+    "test": "node test/bridge.test.mjs && node test/bulk.test.mjs && node --test test/project_agent_mcp.test.mjs",
     "release:check": "npm run check && npm test && npm pack --dry-run"
   }
 }

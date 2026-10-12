@@ -2,7 +2,7 @@
 
 A local [MCP](https://modelcontextprotocol.io/) server for monitoring and managing agents, tasks, runs, and schedules in [Paperclip](https://github.com/paperclipai/paperclip). It uses stdio, Node.js 22+, and the Paperclip REST API. There are no runtime npm dependencies.
 
-This is an independent integration tested with Paperclip `v2026.916.1`. It supports a **local, trusted** Paperclip instance on a loopback HTTP address; remote and authenticated instances are not supported.
+This is an independent integration tested with Paperclip `v2026.916.1`; project and agent setup routes were also checked against local Paperclip `v2026.1005.0`. It supports a **local, trusted** Paperclip instance on a loopback HTTP address; remote and authenticated instances are not supported.
 
 ## Setup
 
@@ -30,7 +30,15 @@ Replace the example UUID and path locally. The server does not load `.env.exampl
 
 ## Tools
 
-The bridge provides task and agent status, runs, comments, logs, schedules, recovery diagnostics, and a bounded monitoring snapshot. With writes enabled, it can update tasks, comment, wake or pause agents, and manage recovery. See [the tool catalog](docs/TOOLS.md) for all 43 tools and backend requirements.
+The bridge exposes 53 tools. Alongside task and run monitoring, it now supports:
+
+- Project listing, reading, creation with a required idempotency key, and metadata updates.
+- Listing, creating, and updating local or Git project workspaces.
+- Codex adapter model listing, idle agent creation, and bounded agent updates.
+
+Agent creation does not start a run. Create and assign a task, then use the existing wake tool when execution is intended. Project and workspace reads omit environment, commands, and runtime policy; agent reads omit arbitrary adapter configuration and credentials. Workspace repository URLs are accepted only as HTTPS or SSH URLs without embedded passwords, query strings, or fragments. Deletion is not exposed.
+
+Project creation deduplicates a retry through its required `idempotencyKey`. Agent and workspace creation have no idempotency key; after a timeout, inspect the current list before retrying. The full live catalog and schemas are available through `node paperclip-mcp-call.mjs --list`.
 
 The optional [Paperclip backend patch](patches/paperclip-supervision-management-bundle-2026.916.1.patch) adds native snapshot, change-feed, conditional-comment, and atomic management routes. The baseline tools work without it. Leave `PAPERCLIP_ATOMIC_MANAGEMENT` unset unless that patch has been deployed and verified against the matching Paperclip version.
 

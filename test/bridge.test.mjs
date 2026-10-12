@@ -389,7 +389,7 @@ try {
   assert.ok(beforeInitializedNotification.error, 'tools/list must wait for notifications/initialized');
   client.notify('notifications/initialized');
   catalog = (await client.request('tools/list')).result.tools;
-  assert.equal(catalog.length, 43);
+  assert.equal(catalog.length, 53);
   tool(catalog, 'paperclip_bridge_metrics', true);
   tool(catalog, 'paperclip_server_snapshot', true);
   tool(catalog, 'paperclip_server_run_page', true);
@@ -402,7 +402,7 @@ try {
     readOnlyClient.notify('notifications/initialized');
     const readOnlyCatalog = (await readOnlyClient.request('tools/list')).result.tools;
     assert.ok(readOnlyCatalog.some(entry => entry.name === 'paperclip_health'), 'Default catalog lost read tools');
-    for (const name of ['paperclip_create_task', 'paperclip_pause_agent', 'paperclip_continue_task', 'paperclip_resolve_recovery', 'paperclip_manage_agents_bulk']) {
+    for (const name of ['paperclip_create_task', 'paperclip_pause_agent', 'paperclip_continue_task', 'paperclip_resolve_recovery', 'paperclip_manage_agents_bulk', 'paperclip_create_project', 'paperclip_update_project', 'paperclip_create_project_workspace', 'paperclip_update_project_workspace', 'paperclip_create_agent', 'paperclip_update_agent']) {
       assert.ok(!readOnlyCatalog.some(entry => entry.name === name), `Default catalog exposed write tool ${name}`);
     }
   } finally { await readOnlyClient.stop(); }
